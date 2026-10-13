@@ -1,5 +1,6 @@
 use axum::{
     extract::{Query, State},
+    response::Html,
     routing::get,
     Json, Router,
 };
@@ -664,6 +665,32 @@ async fn on_connect(socket: SocketRef) {
     );
 }
 
+async fn index() -> Html<&'static str> {
+    Html(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EmulatorJS Netplay</title>
+  <style>
+    body { font: 16px/1.5 ui-sans-serif, system-ui, sans-serif; max-width: 40rem; margin: 3rem auto; padding: 0 1.25rem; color: #1a1a1a; }
+    code { background: #f2f2f2; padding: 0.1rem 0.35rem; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>EmulatorJS Netplay</h1>
+  <p>This is the signaling server. There is no game page here. Point an EmulatorJS client at this host.</p>
+  <ul>
+    <li><a href="/list">/list</a> — open rooms (JSON)</li>
+    <li><a href="/games">/games</a> — registered games (JSON)</li>
+  </ul>
+  <p>Socket.IO is on the same origin, namespace <code>/</code>.</p>
+</body>
+</html>"#,
+    )
+}
+
 #[tokio::main]
 async fn main() {
     let state = AppState {
@@ -691,6 +718,7 @@ async fn main() {
         .allow_origin(Any);
 
     let app = Router::new()
+        .route("/", get(index))
         .route("/list", get(list_rooms))
         .route("/games", get(games))
         .with_state(state)
