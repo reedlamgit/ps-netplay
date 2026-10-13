@@ -28,7 +28,8 @@
 <section id="host-player" hidden>
 <div class="toolbar"><button id="back" class="secondary">← Back</button><span class="player-label">PLAYER 1 / HOST</span><button id="create-room" disabled>Create room</button><button id="close-room" class="secondary" hidden>Close room</button></div>
 <p id="host-status" class="connection-status" role="status" aria-live="polite">Downloading emulator…</p>
-<div id="room-share" hidden><label for="share-link">Share this link with Player 2</label><div class="share-row"><input id="share-link" readonly><button id="copy-link" class="secondary">Copy link</button></div><p id="media-note" class="note"></p></div>
+<div id="resume-panel" class="resume-panel" hidden><p id="resume-message">Returned from another app? Tap to wake the game and audio.</p><button id="resume-game">Resume game</button></div>
+<div id="room-share" hidden><label for="share-link">Share this link with Player 2</label><div class="share-row"><input id="share-link" readonly><button id="share-native" class="secondary" hidden>Share</button><button id="copy-link" class="secondary">Copy link</button></div><p id="media-note" class="note"></p></div>
 <div id="game"></div>
 <p class="note">P1: use the emulator’s touch controls, keyboard, or a gamepad. P2 inputs control the second controller port. Select a two-player mode inside the game.</p>
 </section>

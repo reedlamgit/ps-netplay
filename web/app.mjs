@@ -1,6 +1,7 @@
 import { InputState, parseRoom } from './controls.mjs';
 import { GameRoom } from './room.mjs';
 import { biosArchive, captureGame } from './media.mjs';
+import { resumeGame } from './lifecycle.mjs';
 
 const $ = id => document.getElementById(id);
 let room = null;
@@ -10,6 +11,7 @@ let channel = null;
 let wakeLock = null;
 let remoteInput = null;
 let biosUrl = null;
+let backgrounded = false;
 const held = new Map();
 const touchButtons = [...document.querySelectorAll('[data-button]')];
 const keyboard = { ArrowUp: 4, ArrowDown: 5, ArrowLeft: 6, ArrowRight: 7, KeyZ: 0, KeyX: 8, KeyA: 1, KeyS: 9, Enter: 3, ShiftLeft: 2, KeyQ: 10, KeyE: 11 };
@@ -147,6 +149,11 @@ $('create-room').addEventListener('click', async () => {
   }
 });
 $('close-room').addEventListener('click', () => { stopRoom(); status('Room closed · you can create another room.'); });
+$('share-native').hidden = typeof navigator.share !== 'function';
+$('share-native').addEventListener('click', async () => {
+  try { await navigator.share({ title: 'Join my PS Pocket game', url: $('share-link').value }); }
+  catch (error) { if (error.name !== 'AbortError') status('Sharing failed. Use Copy link instead.'); }
+});
 $('copy-link').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText($('share-link').value); $('copy-link').textContent = 'Copied'; setTimeout(() => { $('copy-link').textContent = 'Copy link'; }, 2000); }
   catch { $('share-link').focus(); $('share-link').select(); status('Select and copy the room link manually.'); }
@@ -213,11 +220,42 @@ window.addEventListener('keyup', event => {
   held.delete(`key:${event.code}`);
   sendControls();
 });
-window.addEventListener('blur', releaseControls);
-window.addEventListener('pagehide', () => { stopRoom(); if (biosUrl) URL.revokeObjectURL(biosUrl); });
-document.addEventListener('visibilitychange', () => {
+function suspendHost() {
   releaseControls();
-  if (document.visibilityState === 'visible' && mode !== 'setup') keepAwake();
+  if (mode === 'host' && window.EJS_emulator?.started) {
+    backgrounded = true;
+    window.EJS_emulator.pause?.();
+  }
+}
+function foreground() {
+  if (document.visibilityState !== 'visible') return;
+  if (mode !== 'setup') keepAwake();
+  if (mode === 'host' && backgrounded && window.EJS_emulator?.started) {
+    $('resume-panel').hidden = false;
+    $('resume-message').textContent = 'The browser paused while you were away. Tap Resume game to wake the game and audio.';
+  }
+}
+$('resume-game').addEventListener('click', async () => {
+  $('resume-game').disabled = true;
+  try {
+    const result = await resumeGame(window.EJS_emulator);
+    backgrounded = false;
+    $('resume-panel').hidden = result.audioRunning;
+    if (!result.audioRunning) $('resume-message').textContent = 'The game loop resumed, but audio is still suspended. Tap Resume game again.';
+    status(room ? 'Game resumed · room still open. P2 may need to reconnect if their connection was interrupted.' : $('share-link').value ? 'Game resumed. The room connection ended while away; create a new room and share its new link.' : 'Game resumed · create a room to invite Player 2.');
+    keepAwake();
+  } catch (error) { $('resume-message').textContent = error.message; }
+  finally { $('resume-game').disabled = false; }
+});
+window.addEventListener('blur', suspendHost);
+// App switching / bfcache must not destroy the room or revoke the BIOS URL.
+// Actual document destruction frees these resources; explicit Leave/Close handles rooms.
+window.addEventListener('pagehide', suspendHost);
+window.addEventListener('pageshow', foreground);
+window.addEventListener('focus', foreground);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') suspendHost();
+  else { releaseControls(); foreground(); }
 });
 setInterval(() => { if (mode === 'guest') sendControls(); else remoteInput?.expire(); }, 100);
 

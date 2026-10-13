@@ -7,11 +7,11 @@ Signaling service: https://ps-netplay.onrender.com
 
 1. Host opens the website and selects their own CHD game and 512 KB PlayStation BIOS from Files.
 2. Start the game, then select **Create room**.
-3. Copy the room link and send it to one friend.
+3. Use **Share** (where supported) or copy the room link and send it to one friend.
 4. Friend opens the link, selects **Join room**, and optionally **Enable sound**.
 5. Host selects a two-player mode inside the game. Guest controls are routed to the emulator’s second controller port.
 
-Start with both devices on the same Wi-Fi. Keep the host browser foregrounded, screen unlocked, and preferably in landscape. The emulator's controls handle P1; the custom controller handles P2.
+Start with both devices on the same Wi-Fi. Keep the host browser foregrounded, screen unlocked, and preferably in landscape. After switching apps, return and tap **Resume game** to wake the emulator and audio. Brief lifecycle events no longer explicitly destroy the room. Long backgrounding can still disconnect it; the page will ask you to create and share a new room if that happens. If iOS discards the tab or loses the graphics context, reload and select the files again. The emulator's controls handle P1; the custom controller handles P2.
 
 ## Architecture
 
