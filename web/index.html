@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#151719"><meta name="description" content="Load your own PlayStation game and share a live two-player room."><title>PS Pocket — Play together</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23151719'/%3E%3Cpath d='M19 19h26v26H19z' fill='none' stroke='%23c6da95' stroke-width='5'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/style.css">
+<script defer src="/vendor/socket.io.min.js"></script>
+<script type="module" src="/app.mjs"></script>
+</head>
+<body><main>
+<header><a class="logo" href="/">PS / POCKET</a><span class="tag">TWO-PLAYER PROTOTYPE</span></header>
+<section id="setup">
+<h1>Your game.<br>Both screens.</h1>
+<p class="intro">Host on your phone. Share a room link. Your friend joins as Player 2 with a live screen and touch controls.</p>
+<div class="setup-grid">
+<section class="host-setup"><h2><span class="step">01 / HOST AS P1</span>Load your game</h2>
+<label for="rom">Game disc</label><input id="rom" type="file"><p class="note">Choose disc.chd. Files stay on the host’s device.</p>
+<label for="bios">PlayStation BIOS</label><input id="bios" type="file"><p class="note">Choose scph5500.bin from your own files.</p>
+<button id="start" disabled>Start game →</button><p id="status" role="status" aria-live="polite">Choose both files to begin.</p>
+</section>
+<section class="join-setup"><h2><span class="step">02 / JOIN AS P2</span>Got a room link?</h2>
+<label for="room-code">Room link or code</label><input id="room-code" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Paste the host’s room link">
+<p class="note">No game or BIOS needed. The host streams the game to you.</p><button id="join">Join room →</button><p id="join-status" role="status" aria-live="polite"></p>
+</section></div>
+<p class="footnote">Start with both phones on the same Wi-Fi. Keep the host page open and screen unlocked. This prototype has no network relay; some internet connections won’t connect. Two players only—multitap is not enabled.</p>
+</section>
+<section id="host-player" hidden>
+<div class="toolbar"><button id="back" class="secondary">← Back</button><span class="player-label">PLAYER 1 / HOST</span><button id="create-room" disabled>Create room</button><button id="close-room" class="secondary" hidden>Close room</button></div>
+<p id="host-status" class="connection-status" role="status" aria-live="polite">Downloading emulator…</p>
+<div id="room-share" hidden><label for="share-link">Share this link with Player 2</label><div class="share-row"><input id="share-link" readonly><button id="copy-link" class="secondary">Copy link</button></div><p id="media-note" class="note"></p></div>
+<div id="game"></div>
+<p class="note">P1: use the emulator’s touch controls, keyboard, or a gamepad. P2 inputs control the second controller port. Select a two-player mode inside the game.</p>
+</section>
+<section id="guest-player" hidden>
+<div class="toolbar"><button id="leave" class="secondary">← Leave room</button><span class="player-label">PLAYER 2</span><button id="sound" class="secondary" disabled>Enable sound</button></div>
+<p id="guest-status" class="connection-status" role="status" aria-live="polite">Connecting…</p>
+<div class="guest-stage">
+<div class="remote-frame"><video id="remote-video" autoplay playsinline muted></video><p id="video-wait">Waiting for the host’s live screen…</p></div>
+<div class="controls-group left-controls" aria-label="Directional controls">
+<div class="shoulders"><button data-button="12" aria-label="L2" disabled>L2</button><button data-button="10" aria-label="L1" disabled>L1</button></div>
+<div class="dpad"><button class="up" data-button="4" aria-label="Up" disabled>▲</button><button class="left" data-button="6" aria-label="Left" disabled>◀</button><span class="pad-center" aria-hidden="true">+</span><button class="right" data-button="7" aria-label="Right" disabled>▶</button><button class="down" data-button="5" aria-label="Down" disabled>▼</button></div>
+</div>
+<div class="controls-group right-controls" aria-label="Action controls">
+<div class="shoulders"><button data-button="11" aria-label="R1" disabled>R1</button><button data-button="13" aria-label="R2" disabled>R2</button></div>
+<div class="facepad"><button class="triangle" data-button="9" aria-label="Triangle" disabled>△</button><button class="square" data-button="1" aria-label="Square" disabled>□</button><button class="circle" data-button="8" aria-label="Circle" disabled>○</button><button class="cross" data-button="0" aria-label="Cross" disabled>×</button></div>
+</div>
+<div class="center-controls"><button data-button="2" disabled>Select</button><button data-button="3" disabled>Start</button></div>
+</div>
+<p class="note guest-note">Turn your phone sideways. Touch controls support multiple fingers. Desktop: arrows, Z = ×, X = ○, A = □, S = △, Enter = Start.</p>
+</section>
+</main></body></html>
