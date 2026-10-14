@@ -1,4 +1,5 @@
 import { findHost } from './controls.mjs';
+import { CounterRate, videoStats } from './stream-stats.mjs';
 
 export const SERVER = 'https://ps-netplay.onrender.com';
 const ICE = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] }] };
@@ -6,8 +7,8 @@ const ICE = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.c
 // Uses the existing EmulatorJS server for room membership and WebRTC signaling.
 // Media and controls go directly between browsers, not through Render.
 export class GameRoom {
-  constructor({ onStatus, onStream, onChannel, onClose, onPeerLeft }) {
-    Object.assign(this, { onStatus, onStream, onChannel, onClose, onPeerLeft });
+  constructor({ onStatus, onStream, onChannel, onClose, onPeerLeft, onVideoStats }) {
+    Object.assign(this, { onStatus, onStream, onChannel, onClose, onPeerLeft, onVideoStats });
     this.peers = new Map();
     this.players = {};
     this.closed = false;
@@ -71,6 +72,7 @@ export class GameRoom {
       if (!ids.has(id)) {
         clearTimeout(peer.connectTimer);
         clearTimeout(peer.disconnectTimer);
+        clearInterval(peer.statsTimer);
         peer.pc.close();
         this.peers.delete(id);
         this.onPeerLeft?.();
@@ -93,6 +95,8 @@ export class GameRoom {
     const pc = new RTCPeerConnection(ICE);
     const peer = { pc, pending: [], channel: null, disconnectTimer: null };
     this.peers.set(id, peer);
+    peer.rates = { received: new CounterRate(), decoded: new CounterRate(), encoded: new CounterRate() };
+    peer.statsTimer = setInterval(() => this.reportVideo(peer).catch(() => {}), 1500);
     pc.onicecandidate = event => {
       if (event.candidate && !this.closed) this.socket.emit('webrtc-signal', { target: id, candidate: event.candidate.toJSON() });
     };
@@ -110,7 +114,7 @@ export class GameRoom {
       if (pc.connectionState === 'connected') {
         clearTimeout(peer.connectTimer);
         if (peer.channel?.readyState === 'open') this.onChannel(peer.channel);
-        this.onStatus(this.role === 'host' ? 'P2 connected · game streaming live' : 'Connected as P2 · game streaming live');
+        this.onStatus(this.role === 'host' ? 'P2 connected · controls ready' : 'Connected as P2 · controls ready');
       }
       if (pc.connectionState === 'failed') this.peerError(new Error('Direct connection failed. Try both phones on the same Wi-Fi. This prototype has no TURN relay.'));
       if (pc.connectionState === 'disconnected') {
@@ -123,6 +127,15 @@ export class GameRoom {
       if (pc.connectionState !== 'connected' && !this.closed) this.peerError(new Error('Could not establish a direct connection. Try the same Wi-Fi; some networks need a TURN relay, which is not configured yet.'));
     }, 35000);
     return peer;
+  }
+  async reportVideo(peer) {
+    if (this.closed || typeof peer.pc.getStats !== 'function') return;
+    const report = await peer.pc.getStats();
+    if (this.closed || ![...this.peers.values()].includes(peer)) return;
+    const sample = videoStats(report, this.role);
+    const now = performance.now();
+    const rates = Object.fromEntries(Object.entries(peer.rates).map(([key, rate]) => [key, rate.sample(sample[key], now)]));
+    this.onVideoStats?.({ ...sample, rates });
   }
   channel(peer, channel) {
     peer.channel = channel;
@@ -174,6 +187,7 @@ export class GameRoom {
     for (const peer of this.peers.values()) {
       clearTimeout(peer.connectTimer);
       clearTimeout(peer.disconnectTimer);
+      clearInterval(peer.statsTimer);
       peer.pc.close();
     }
     this.peers.clear();

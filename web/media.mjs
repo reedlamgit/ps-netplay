@@ -11,7 +11,7 @@ export function sourceAudioNodes(emulator) {
   return Object.values(emulator?.Module?.AL?.currentCtx?.sources || {}).map(source => source.gain).filter(node => typeof node?.connect === 'function');
 }
 
-export async function captureGame(emulator) {
+export async function captureGame(emulator, previewParent) {
   if (!emulator?.started || !emulator.canvas) throw new Error('Start the game before opening a room.');
   const canvas = document.createElement('canvas');
   canvas.width = 640;
@@ -19,7 +19,23 @@ export async function captureGame(emulator) {
   if (typeof canvas.captureStream !== 'function') throw new Error('This browser cannot stream the game canvas. Try a computer host.');
   const context = canvas.getContext('2d', { alpha: false });
   if (!context) throw new Error('Could not create the game stream.');
-  const stream = canvas.captureStream(30);
+  canvas.className = 'stream-preview-canvas';
+  canvas.setAttribute('aria-label', 'Outgoing game video');
+  // Keep the capture surface painted in the DOM, rather than detached/offscreen.
+  previewParent?.appendChild(canvas);
+  let stream;
+  let videoTrack;
+  try {
+    stream = canvas.captureStream(0);
+    videoTrack = stream.getVideoTracks()[0];
+    if (!videoTrack) throw new Error('The browser did not create a video track.');
+    if (typeof videoTrack.requestFrame !== 'function') {
+      stream.getTracks().forEach(track => track.stop());
+      stream = canvas.captureStream(30);
+      videoTrack = stream.getVideoTracks()[0];
+    }
+  } catch (error) { canvas.remove(); throw error; }
+  const stats = { frames: 0, lastDrawAt: 0, lastError: '' };
   let stopped = false;
   let frame;
   let previous = 0;
@@ -36,14 +52,25 @@ export async function captureGame(emulator) {
   }
   function draw(now) {
     if (stopped) return;
-    if (now - previous >= 1000 / 30) {
-      const aspect = emulator.gameManager.getVideoDimensions('aspect') || 4 / 3;
-      const crop = gameViewport(emulator.canvas.width, emulator.canvas.height, aspect);
-      context.drawImage(emulator.canvas, crop.x, crop.y, crop.width, crop.height, 0, 0, canvas.width, canvas.height);
-      previous = now;
-    }
-    if (now - lastAudioScan > 1000) { connectAudioSources(); lastAudioScan = now; }
+    // Schedule first: a transient resize/context error must not kill the pump.
     frame = requestAnimationFrame(draw);
+    try {
+      if (now - previous >= 1000 / 30) {
+        if (!emulator.canvas.width || !emulator.canvas.height) {
+          stats.lastError = 'Waiting for the emulator canvas after resizing.';
+          return;
+        }
+        const aspect = emulator.gameManager.getVideoDimensions('aspect') || 4 / 3;
+        const crop = gameViewport(emulator.canvas.width, emulator.canvas.height, aspect);
+        context.drawImage(emulator.canvas, crop.x, crop.y, crop.width, crop.height, 0, 0, canvas.width, canvas.height);
+        videoTrack.requestFrame?.();
+        previous = now;
+        stats.frames++;
+        stats.lastDrawAt = now;
+        stats.lastError = '';
+      }
+      if (now - lastAudioScan > 1000) { connectAudioSources(); lastAudioScan = now; }
+    } catch (error) { stats.lastError = error.message || 'Could not copy a game frame.'; }
   }
   frame = requestAnimationFrame(draw);
   let audioWarning = '';
@@ -61,7 +88,10 @@ export async function captureGame(emulator) {
   return {
     stream,
     audioWarning,
+    stats,
+    canvas,
     stop() {
+      if (stopped) return;
       stopped = true;
       cancelAnimationFrame(frame);
       stream.getTracks().forEach(track => track.stop());
@@ -69,6 +99,7 @@ export async function captureGame(emulator) {
         try { node.disconnect(destination); } catch { /* Source may already be disconnected on emulator exit. */ }
       }
       audioNodes.clear();
+      canvas.remove();
     }
   };
 }

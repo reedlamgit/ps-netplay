@@ -30,12 +30,14 @@
 <p id="host-status" class="connection-status" role="status" aria-live="polite">Downloading emulator…</p>
 <div id="resume-panel" class="resume-panel" hidden><p id="resume-message">Returned from another app? Tap to wake the game and audio.</p><button id="resume-game">Resume game</button></div>
 <div id="room-share" hidden><label for="share-link">Share this link with Player 2</label><div class="share-row"><input id="share-link" readonly><button id="share-native" class="secondary" hidden>Share</button><button id="copy-link" class="secondary">Copy link</button></div><p id="media-note" class="note"></p></div>
+<div id="stream-monitor" class="stream-monitor" hidden><div id="capture-preview"></div><div><strong>Outgoing screen</strong><p id="host-video-health" class="note">Checking capture and video encoder…</p></div></div>
 <div id="game"></div>
 <p class="note">P1: use the emulator’s touch controls, keyboard, or a gamepad. P2 inputs control the second controller port. Select a two-player mode inside the game.</p>
 </section>
 <section id="guest-player" hidden>
-<div class="toolbar"><button id="leave" class="secondary">← Leave room</button><span class="player-label">PLAYER 2</span><button id="sound" class="secondary" disabled>Enable sound</button></div>
+<div class="toolbar"><button id="leave" class="secondary">← Leave room</button><span class="player-label">PLAYER 2</span><button id="sound" class="secondary" disabled>Enable sound</button><button id="resume-video" class="secondary" disabled>Resume video</button></div>
 <p id="guest-status" class="connection-status" role="status" aria-live="polite">Connecting…</p>
+<p id="guest-video-health" class="video-health">Waiting for video measurements…</p>
 <div class="guest-stage">
 <div class="remote-frame"><video id="remote-video" autoplay playsinline muted></video><p id="video-wait">Waiting for the host’s live screen…</p></div>
 <div class="controls-group left-controls" aria-label="Directional controls">

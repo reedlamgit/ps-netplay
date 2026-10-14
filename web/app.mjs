@@ -2,6 +2,8 @@ import { InputState, parseRoom } from './controls.mjs';
 import { GameRoom } from './room.mjs';
 import { biosArchive, captureGame } from './media.mjs';
 import { resumeGame } from './lifecycle.mjs';
+import { CounterRate } from './stream-stats.mjs';
+import { enableGameReadback } from './readback.mjs';
 
 const $ = id => document.getElementById(id);
 let room = null;
@@ -12,6 +14,12 @@ let wakeLock = null;
 let remoteInput = null;
 let biosUrl = null;
 let backgrounded = false;
+let copyRate = new CounterRate();
+let displayRate = new CounterRate();
+let hostReport = null;
+let displayedFrames = 0;
+let videoFrameCallback = null;
+let restoreContextHook = null;
 const held = new Map();
 const touchButtons = [...document.querySelectorAll('[data-button]')];
 const keyboard = { ArrowUp: 4, ArrowDown: 5, ArrowLeft: 6, ArrowRight: 7, KeyZ: 0, KeyX: 8, KeyA: 1, KeyS: 9, Enter: 3, ShiftLeft: 2, KeyQ: 10, KeyE: 11 };
@@ -47,11 +55,14 @@ $('start').addEventListener('click', async () => {
   $('start').disabled = true;
   try {
     biosUrl = await biosArchive(bios);
+    restoreContextHook = enableGameReadback(() => window.EJS_emulator?.canvas);
     Object.assign(window, {
       EJS_player: '#game', EJS_core: 'psx', EJS_gameUrl: game, EJS_gameName: game.name,
       EJS_biosUrl: biosUrl, EJS_pathtodata: 'https://cdn.emulatorjs.org/stable/data/',
       EJS_startOnLoaded: true, EJS_color: '#c6da95', EJS_language: 'en-US',
       EJS_onGameStart: () => {
+        restoreContextHook?.();
+        restoreContextHook = null;
         status('Game running · create a room to invite Player 2.');
         $('create-room').disabled = false;
         remoteInput = new InputState((player, id, value) => window.EJS_emulator.gameManager.simulateInput(player, id, value));
@@ -62,9 +73,15 @@ $('start').addEventListener('click', async () => {
     status('Downloading emulator and loading your game…');
     const script = document.createElement('script');
     script.src = window.EJS_pathtodata + 'loader.js';
-    script.onerror = () => status('Could not download the emulator. Check your connection, then reload.');
+    script.onerror = () => {
+      restoreContextHook?.(); restoreContextHook = null;
+      status('Could not download the emulator. Check your connection, then reload.');
+    };
     document.body.appendChild(script);
-  } catch (error) { $('status').textContent = error.message; $('start').disabled = false; }
+  } catch (error) {
+    restoreContextHook?.(); restoreContextHook = null;
+    $('status').textContent = error.message; $('start').disabled = false;
+  }
 });
 
 function releaseControls() {
@@ -79,6 +96,13 @@ function sendControls() {
   channel.send(JSON.stringify({ type: 'buttons', buttons: [...new Set(held.values())] }));
 }
 function stopRoom() {
+  const video = $('remote-video');
+  if (videoFrameCallback !== null) video.cancelVideoFrameCallback?.(videoFrameCallback);
+  videoFrameCallback = null;
+  displayedFrames = 0;
+  displayRate = new CounterRate();
+  hostReport = null;
+  $('stream-monitor').hidden = true;
   releaseControls();
   controlsEnabled(false);
   channel = null;
@@ -95,8 +119,20 @@ function stopRoom() {
     $('remote-video').muted = true;
     $('sound').textContent = 'Enable sound';
     $('sound').disabled = true;
+    $('resume-video').disabled = true;
+    $('guest-video-health').textContent = 'Video connection closed.';
     $('video-wait').hidden = false;
   }
+}
+const fps = value => Number.isFinite(value) ? `${value} fps` : '…';
+function watchVideoFrames() {
+  const video = $('remote-video');
+  if (videoFrameCallback !== null || typeof video.requestVideoFrameCallback !== 'function') return;
+  function frame() {
+    displayedFrames++;
+    videoFrameCallback = mode === 'guest' && video.srcObject ? video.requestVideoFrameCallback(frame) : null;
+  }
+  videoFrameCallback = video.requestVideoFrameCallback(frame);
 }
 function createConnection() {
   return new GameRoom({
@@ -106,11 +142,33 @@ function createConnection() {
       if (video.srcObject !== stream) video.srcObject = stream;
       video.play().catch(() => status('Tap Enable sound to start the live video.'));
       $('sound').disabled = false;
+      $('resume-video').disabled = false;
+      watchVideoFrames();
+    },
+    onVideoStats: sample => {
+      if (mode === 'host' && capture) {
+        const copied = copyRate.sample(capture.stats.frames, performance.now());
+        const paused = !!window.EJS_emulator?.paused;
+        $('host-video-health').textContent = `${paused ? 'P1 paused · ' : ''}Capture ${fps(copied)} · Sending ${fps(sample.rates.encoded)}${sample.codec ? ' · ' + sample.codec : ''}${capture.stats.lastError ? ' · ' + capture.stats.lastError : ''}`;
+        if (channel?.readyState === 'open' && channel.bufferedAmount < 8192) channel.send(JSON.stringify({ type: 'host-video', paused, copied, error: capture.stats.lastError }));
+      } else if (mode === 'guest') {
+        const displayed = typeof $('remote-video').requestVideoFrameCallback === 'function' ? displayRate.sample(displayedFrames, performance.now()) : null;
+        const host = hostReport ? `${hostReport.paused ? 'P1 paused' : 'P1 capture ' + fps(hostReport.copied)} · ` : '';
+        $('guest-video-health').textContent = `${host}Receiving ${fps(sample.rates.received)} · Decoding ${fps(sample.rates.decoded)} · Display ${fps(displayed)}${sample.codec ? ' · ' + sample.codec : ''}${hostReport?.error ? ' · ' + hostReport.error : ''}`;
+      }
     },
     onChannel: next => {
       channel = next;
-      if (mode === 'guest') { controlsEnabled(true); sendControls(); }
-      else next.onmessage = event => {
+      if (mode === 'guest') {
+        controlsEnabled(true); sendControls();
+        next.onmessage = event => {
+          if (typeof event.data !== 'string' || event.data.length > 1024) return;
+          try {
+            const message = JSON.parse(event.data);
+            if (message.type === 'host-video') hostReport = { paused: !!message.paused, copied: Number.isFinite(message.copied) ? message.copied : null, error: typeof message.error === 'string' ? message.error.slice(0, 160) : '' };
+          } catch { /* Ignore malformed host diagnostics. */ }
+        };
+      } else next.onmessage = event => {
         if (typeof event.data !== 'string' || event.data.length > 1024) return;
         try {
           const message = JSON.parse(event.data);
@@ -131,7 +189,9 @@ $('create-room').addEventListener('click', async () => {
   $('create-room').disabled = true;
   let connection;
   try {
-    capture = await captureGame(window.EJS_emulator);
+    $('stream-monitor').hidden = false;
+    copyRate = new CounterRate();
+    capture = await captureGame(window.EJS_emulator, $('capture-preview'));
     const code = crypto.randomUUID().replaceAll('-', '').slice(0, 24);
     connection = createConnection();
     room = connection;
@@ -173,6 +233,14 @@ $('join').addEventListener('click', async () => {
   } finally { if (!room || room === connection) $('join').disabled = false; }
 });
 $('remote-video').addEventListener('loadeddata', () => { $('video-wait').hidden = true; });
+$('resume-video').addEventListener('click', async () => {
+  const video = $('remote-video'), stream = video.srcObject;
+  if (!stream) return;
+  video.srcObject = null;
+  video.srcObject = stream;
+  try { await video.play(); watchVideoFrames(); status('Video playback resumed. Check whether the frame counters are increasing.'); }
+  catch { status('Playback was blocked. Tap Resume video again.'); }
+});
 $('sound').addEventListener('click', async () => {
   const video = $('remote-video');
   try {

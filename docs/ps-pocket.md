@@ -19,6 +19,9 @@ Start with both devices on the same Wi-Fi. Keep the host browser foregrounded, s
 - EmulatorJS stable CDN: PlayStation core runs only on the host.
 - Existing Rust Socket.IO server: `open-room`, `join-room`, `users-updated`, and `webrtc-signal`. No backend changes were required for streaming.
 - WebRTC: direct 640×480 canvas video, OpenAL-source audio, reliable data channel carrying held-button snapshots.
+- The emulator's WebGL context is created with `preserveDrawingBuffer: true`, scoped to its game canvas, so asynchronous readback does not copy a discarded/black buffer. The context hook is restored after emulator startup.
+- A visible outgoing preview receives game copies. Capture requests frames explicitly (automatic 30 FPS fallback if unsupported) and survives transient resize/copy errors. Host/guest counters distinguish capture, encoding, receiving, decoding and display; connection state alone is not proof of video.
+- P2 can tap **Resume video** to reattach/play the existing stream without leaving the room.
 - Inputs are validated against joypad button IDs and apply only to player index 1. A one-second watchdog releases stale input.
 - Room capacity is two. Random 96-bit invitation IDs and a per-room domain avoid listing these rooms under a shared public room directory. Invitation links should still be treated as private; this is not an authenticated service.
 - BIOS files are packed locally into an uncompressed ZIP to preserve the filename required by the core. Files are not uploaded.
@@ -30,7 +33,7 @@ Start with both devices on the same Wi-Fi. Keep the host browser foregrounded, s
 - Host phone can overheat or stop streaming when backgrounded/locked.
 - Physical iPhone hosting and sustained performance have not been verified.
 - Game/BIOS licensing and compatibility remain the user's responsibility.
-- EmulatorJS internal APIs (`simulateInput`, OpenAL graph, canvas viewport) depend on the loaded stable version.
+- EmulatorJS internal APIs (`simulateInput`, OpenAL graph, canvas viewport) depend on the loaded stable version. Preserving the drawing buffer can increase GPU memory/processing costs, especially on a phone.
 - Guest gamepad support is not implemented; touch and keyboard are available.
 
 ## Verify and deploy
