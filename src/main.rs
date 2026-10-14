@@ -173,6 +173,76 @@ async fn games(State(state): State<AppState>) -> Json<HashMap<String, Value>> {
     Json(g.clone())
 }
 
+const STREAMING_V2_GAME_ID: &str = "ps-pocket-streaming-v2";
+
+fn is_streaming_v2_game(game_id: &str) -> bool {
+    game_id == STREAMING_V2_GAME_ID
+}
+
+fn room_capacity(game_id: &str, requested: Option<usize>) -> usize {
+    if is_streaming_v2_game(game_id) {
+        4
+    } else {
+        requested.unwrap_or(4)
+    }
+}
+
+fn player_index(players: &HashMap<String, Value>) -> usize {
+    let occupied: std::collections::HashSet<usize> = players
+        .values()
+        .filter_map(|player| player.get("playerIndex").and_then(Value::as_u64))
+        .filter_map(|index| usize::try_from(index).ok())
+        .collect();
+    (0..4).find(|index| !occupied.contains(index)).unwrap_or(4)
+}
+
+fn set_player_identity(player: &mut Value, index: usize, role: &str) {
+    player["role"] = json!(role);
+    player["playerIndex"] = json!(index);
+    player["player_name"] = json!(format!("P{}", index + 1));
+}
+
+#[cfg(test)]
+mod room_slot_tests {
+    use super::{is_streaming_v2_game, player_index, room_capacity, set_player_identity};
+    use serde_json::{json, Value};
+    use std::collections::HashMap;
+
+    #[test]
+    fn streaming_v2_uses_four_slots_without_changing_legacy_capacity_policy() {
+        assert!(is_streaming_v2_game("ps-pocket-streaming-v2"));
+        assert_eq!(room_capacity("ps-pocket-streaming-v2", Some(2)), 4);
+        assert!(!is_streaming_v2_game("ordinary-emulatorjs"));
+        assert_eq!(room_capacity("ordinary-emulatorjs", Some(2)), 2);
+    }
+
+    #[test]
+    fn allocates_first_vacant_slot_without_renumbering_members() {
+        let mut players = HashMap::new();
+        let mut host = json!({});
+        set_player_identity(&mut host, 0, "host");
+        players.insert("host".to_string(), host);
+        let mut guest = json!({});
+        set_player_identity(&mut guest, 1, "guest");
+        players.insert("guest".to_string(), guest);
+        players.remove("guest");
+        let next = player_index(&players);
+        assert_eq!(next, 1);
+        let mut third = Value::Null;
+        set_player_identity(&mut third, next, "guest");
+        assert_eq!(third["player_name"], "P2");
+        assert_eq!(players["host"]["player_name"], "P1");
+    }
+
+    #[test]
+    fn caps_slots_at_four() {
+        let players = (0..4)
+            .map(|index| (index.to_string(), json!({"playerIndex": index})))
+            .collect();
+        assert_eq!(player_index(&players), 4);
+    }
+}
+
 fn collect_socket_ids(players: &HashMap<String, Value>) -> Vec<String> {
     players
         .values()
@@ -227,39 +297,37 @@ async fn leave_internal(s: &SocketRef, state: &AppState) {
 
     {
         let mut rooms = state.rooms.write().await;
+        let mut host_departed = false;
         if let Some(room) = rooms.get_mut(&session_id) {
             room.players.remove(&player_id);
             room.peers.retain(|p| p.source != sid && p.target != sid);
-
-            if room.owner == sid && !room.players.is_empty() {
+            host_departed = room.owner == sid && is_streaming_v2_game(&room.game_id);
+            if room.owner == sid && !host_departed && !room.players.is_empty() {
                 if let Some(next_owner) = room
                     .players
                     .values()
                     .next()
-                    .and_then(|v| v.get("socketId"))
-                    .and_then(|v| v.as_str())
+                    .and_then(|player| player.get("socketId"))
+                    .and_then(Value::as_str)
                 {
-                    let new_owner = next_owner.to_string();
-                    room.owner = new_owner.clone();
-
-                    for peer in room.peers.iter_mut() {
+                    let next_owner = next_owner.to_string();
+                    room.owner = next_owner.clone();
+                    for peer in &mut room.peers {
                         if peer.source == sid {
-                            peer.source = new_owner.clone();
+                            peer.source = next_owner.clone();
                         }
                     }
-
-                    if let Some(first_peer) = room.peers.first() {
-                        new_owner_renegotiate = Some((new_owner, first_peer.target.clone()));
+                    if let Some(peer) = room.peers.first() {
+                        new_owner_renegotiate = Some((next_owner, peer.target.clone()));
                     }
                 }
             }
 
             players_snapshot = room.players.clone();
             socket_ids_snapshot = collect_socket_ids(&players_snapshot);
-
-            if room.players.is_empty() {
-                rooms.remove(&session_id);
-            }
+        }
+        if host_departed || players_snapshot.is_empty() {
+            rooms.remove(&session_id);
         }
     }
 
@@ -310,12 +378,16 @@ async fn on_connect(socket: SocketRef) {
 
             let game_id = v_to_string_lossy(&extra, "game_id").unwrap_or_else(|| "default".into());
             let domain = v_to_string_lossy(&extra, "domain").unwrap_or_else(|| "unknown".into());
-            let max_players = data.max_players.unwrap_or(4);
+            let is_v2_room = is_streaming_v2_game(&game_id);
+            let max_players = room_capacity(&game_id, data.max_players);
             let password = normalize_password(data.password);
 
             extra["socketId"] = json!(s.id.to_string());
 
             let mut players = HashMap::new();
+            if is_v2_room {
+                set_player_identity(&mut extra, 0, "host");
+            }
             players.insert(player_id.clone(), extra);
 
             {
@@ -354,10 +426,14 @@ async fn on_connect(socket: SocketRef) {
                 );
             }
 
-            let _ = ack.send(&(Value::Null,));
+            let payload = json!(players);
+            if is_v2_room {
+                let _ = ack.send(&(Value::Null, &payload));
+            } else {
+                let _ = ack.send(&(Value::Null,));
+            }
 
             let socket_ids = vec![s.id.to_string()];
-            let payload = json!(players);
             emit_to_sockets_including_self(&s, &socket_ids, "users-updated", &payload).await;
         },
     );
@@ -399,11 +475,18 @@ async fn on_connect(socket: SocketRef) {
                     }
                 }
 
-                if room.players.len() >= room.max_players {
+                let is_v2_room = is_streaming_v2_game(&room.game_id);
+                if room.players.len() >= room.max_players
+                    || (is_v2_room && player_index(&room.players) >= 4)
+                {
                     let _ = ack.send(&("Room full",));
                     return;
                 }
 
+                if is_v2_room {
+                    let slot = player_index(&room.players);
+                    set_player_identity(&mut extra, slot, "guest");
+                }
                 extra["socketId"] = json!(s.id.to_string());
                 room.players.insert(player_id.clone(), extra);
 
@@ -615,7 +698,8 @@ async fn on_connect(socket: SocketRef) {
 
             let socket_ids = {
                 let rooms = state.rooms.read().await;
-                rooms.get(&session_id)
+                rooms
+                    .get(&session_id)
                     .map(|r| collect_socket_ids(&r.players))
                     .unwrap_or_default()
             };
@@ -635,7 +719,8 @@ async fn on_connect(socket: SocketRef) {
 
             let socket_ids = {
                 let rooms = state.rooms.read().await;
-                rooms.get(&session_id)
+                rooms
+                    .get(&session_id)
                     .map(|r| collect_socket_ids(&r.players))
                     .unwrap_or_default()
             };
@@ -655,7 +740,8 @@ async fn on_connect(socket: SocketRef) {
 
             let socket_ids = {
                 let rooms = state.rooms.read().await;
-                rooms.get(&session_id)
+                rooms
+                    .get(&session_id)
                     .map(|r| collect_socket_ids(&r.players))
                     .unwrap_or_default()
             };
