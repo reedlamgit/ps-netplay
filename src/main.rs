@@ -42,6 +42,7 @@ struct Room {
     domain: String,
     password: Option<String>,
     max_players: usize,
+    discoverable: bool,
 }
 
 #[derive(Clone)]
@@ -75,6 +76,11 @@ struct OpenRoomData {
     password: Option<String>,
     #[serde(rename = "maxPlayers")]
     max_players: Option<usize>,
+}
+
+#[derive(Deserialize)]
+struct DiscoveryData {
+    discoverable: bool,
 }
 
 #[derive(Deserialize)]
@@ -141,7 +147,10 @@ async fn list_rooms(
     let mut out = HashMap::new();
 
     for (session_id, room) in rooms.iter() {
-        if room.domain != dom || room.game_id != gid {
+        if room.domain != dom || room.game_id != gid
+            || (is_streaming_v2_game(&room.game_id)
+                && (!room.discoverable || room.players.len() >= room.max_players))
+        {
             continue;
         }
 
@@ -408,6 +417,7 @@ async fn on_connect(socket: SocketRef) {
                         domain,
                         password,
                         max_players,
+                        discoverable: false,
                     },
                 );
             }
@@ -435,6 +445,29 @@ async fn on_connect(socket: SocketRef) {
 
             let socket_ids = vec![s.id.to_string()];
             emit_to_sockets_including_self(&s, &socket_ids, "users-updated", &payload).await;
+        },
+    );
+
+    socket.on(
+        "set-room-discoverable",
+        |s: SocketRef, Data::<DiscoveryData>(data), SocketState::<AppState>(state), ack: AckSender| async move {
+            let session_id = state.index.read().await.get(&s.id.to_string())
+                .map(|entry| entry.session_id.clone());
+            let Some(session_id) = session_id else {
+                let _ = ack.send(&("Not in a room",));
+                return;
+            };
+            let mut rooms = state.rooms.write().await;
+            let Some(room) = rooms.get_mut(&session_id) else {
+                let _ = ack.send(&("Room not found",));
+                return;
+            };
+            if room.owner != s.id.to_string() || !is_streaming_v2_game(&room.game_id) {
+                let _ = ack.send(&("Only the host can change room visibility",));
+                return;
+            }
+            room.discoverable = data.discoverable;
+            let _ = ack.send(&(Value::Null, data.discoverable));
         },
     );
 
